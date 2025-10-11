@@ -1,0 +1,39 @@
+name: keyword-gen-env
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core
+  - python=3.12
+  - pip
+  - ipykernel
+  - tqdm
+  - numpy>=1.26
+  - pandas>=2.2
+  - pyarrow>=15
+  - boto3>=1.35
+  - s3fs>=2024.6.0
+  - scikit-learn>=1.5
+  - jupyterlab
+  # (Optional CPU-only PyTorch fallback; replace with GPU build as needed)
+  - pytorch
+  - torchvision
+  - torchaudio
+
+  # Pip section (pull latest HF ecosystem for fine-tuning)
+  - pip:
+      - transformers
+      - accelerate
+      - peft
+      - trl
+      - datasets
+      - evaluate
+      - sentencepiece
+      - huggingface_hub
+      - wandb
+      - rich
+      - py7zr
+      # Optional: GPU/quantization helpers (uncomment if needed)
+      # - bitsandbytes
+      # - flash-attn
