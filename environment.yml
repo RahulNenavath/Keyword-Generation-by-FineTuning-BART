@@ -1,4 +1,4 @@
-name: keyword-gen-env
+name: keywordgen
 channels:
   - conda-forge
   - defaults
@@ -34,6 +34,3 @@ dependencies:
       - wandb
       - rich
       - py7zr
-      # Optional: GPU/quantization helpers (uncomment if needed)
-      # - bitsandbytes
-      # - flash-attn
