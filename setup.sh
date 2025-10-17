@@ -77,5 +77,5 @@ fi
 echo "==> Registering Jupyter kernel..."
 python -m ipykernel install --user --name "$ENV_NAME" --display-name "$KERNEL_NAME"
 
-echo "✅ Setup complete."
+echo "Setup complete."
 echo "➡  To use:  conda activate $ENV_NAME"

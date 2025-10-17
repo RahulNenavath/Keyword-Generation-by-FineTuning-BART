@@ -9,13 +9,12 @@ ipykernel>=6.29
 scikit-learn>=1.5
 polars==1.34.0
 hf-transfer
+rouge-score
 
-# --- PyTorch (choose appropriate build for your platform) ---
 torch
 torchvision
 torchaudio
 
-# --- Hugging Face fine-tuning stack (latest) ---
 transformers
 accelerate
 peft

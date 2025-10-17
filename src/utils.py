@@ -1,7 +1,72 @@
 import re
+import os
 import pandas as pd
-from typing import List, Dict, Union
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, AutoModelForSeq2SeqLM, PreTrainedModel
+from typing import List, Dict, Union, Optional
 from datasets import Dataset, DatasetDict, Features, Value, Sequence
+
+
+class CheckpointSaver:
+    """
+    Utility to extract the best (or last) Trainer checkpoint and save
+    a clean, portable model directory with tokenizer and generation config.
+    """
+
+    @staticmethod
+    def save_best_model_dir(
+        trainer,
+        out_dir: str,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        make_generation_config: bool = True,
+    ) -> str:
+        """
+        Args:
+            trainer: a Seq2SeqTrainer after `trainer.train()`
+            out_dir: path to save the consolidated model folder
+            tokenizer: optional tokenizer to save; if None, use trainer.tokenizer
+            make_generation_config: if True, writes generation_config.json if missing
+
+        Returns:
+            out_dir (for convenience)
+        """
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Prefer the best checkpoint; fall back to last trainer.args.output_dir
+        best = getattr(trainer.state, "best_model_checkpoint", None)
+        if best is None:
+            # Look for latest checkpoint subdir
+            checkpoints = [
+                os.path.join(trainer.args.output_dir, d)
+                for d in os.listdir(trainer.args.output_dir)
+                if d.startswith("checkpoint-")
+                and os.path.isdir(os.path.join(trainer.args.output_dir, d))
+            ]
+            if not checkpoints:
+                raise FileNotFoundError(
+                    "No checkpoint-* directories found. Ensure you trained with save_steps>0."
+                )
+            best = sorted(checkpoints, key=lambda p: int(p.split("-")[-1]))[-1]
+
+        # Load the model weights from that checkpoint
+        model: PreTrainedModel = AutoModelForSeq2SeqLM.from_pretrained(best)
+        model.save_pretrained(out_dir)
+
+        # Save tokenizer
+        tok = tokenizer
+        if tok is None:
+            raise ValueError("Tokenizer not available. Pass it explicitly or ensure trainer.tokenizer is set.")
+        tok.save_pretrained(out_dir)
+
+        # Optionally write/refresh generation_config.json
+        if make_generation_config:
+            try:
+                model.generation_config.save_pretrained(out_dir)
+            except Exception:
+                pass  # not fatal
+
+        print(f"[CheckpointSaver] Saved consolidated model to: {out_dir}")
+        return out_dir
+
 
 def normalize_kw_string(s: str) -> List[str]:
     if s is None:
