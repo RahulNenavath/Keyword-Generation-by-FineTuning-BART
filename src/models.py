@@ -90,7 +90,7 @@ class KeywordSeq2SeqModel:
             weight_decay=self.train_cfg.weight_decay,
 
             logging_steps=self.train_cfg.logging_steps,
-            evaluation_strategy=self.train_cfg.eval_strategy,
+            eval_strategy=self.train_cfg.eval_strategy,
             eval_steps=self.train_cfg.eval_steps,
             save_steps=self.train_cfg.save_steps,
             save_total_limit=self.train_cfg.save_total_limit,
