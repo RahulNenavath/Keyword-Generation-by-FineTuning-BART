@@ -16,7 +16,7 @@ from transformers import (
 
 from utils import normalize_kw_string
 from schema import Seq2SeqKwPreprocConfig, ModelConfig, TrainConfig, Seq2SeqKwInferConfig
-from dataloader import Seq2SeqKeywordPreprocessor, DataCollatorForSeq2SeqSimple
+from dataloaders import Seq2SeqKeywordPreprocessor, DataCollatorForSeq2SeqSimple
 
 
 class KeywordSeq2SeqModel:

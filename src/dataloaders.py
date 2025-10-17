@@ -2,9 +2,8 @@ import torch
 from dataclasses import dataclass
 from typing import Dict, Optional, List, Any
 from schema import Seq2SeqKwPreprocConfig
-from transformers import PreTrainedTokenizerBase
 from datasets import DatasetDict
-from transformers import DataCollator, AutoTokenizer
+from transformers import DataCollator, AutoTokenizer, PreTrainedTokenizerBase
 
 class Seq2SeqKeywordPreprocessor:
     def __init__(self, tokenizer: PreTrainedTokenizerBase, cfg: Seq2SeqKwPreprocConfig):
