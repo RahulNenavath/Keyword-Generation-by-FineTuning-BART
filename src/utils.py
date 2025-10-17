@@ -4,42 +4,32 @@ from typing import List, Dict, Union
 from datasets import Dataset, DatasetDict, Features, Value, Sequence
 
 def normalize_kw_string(s: str) -> List[str]:
-    """
-    Normalize a model output string into a set/list of keywords.
-    Splits on newline/semicolon/commas, trims, lowercases, dedups (order-insensitive for metrics).
-    """
     if s is None:
         return []
-    # split on common separators
     raw = []
     for chunk in s.split("\n"):
         raw.extend([p for w in chunk.split(";") for p in w.split(",")])
-    norm = []
-    seen = set()
+    norm, seen = [], set()
     for k in raw:
         k2 = k.strip()
-        k_norm = k2.casefold()
-        if k2 and k_norm not in seen:
-            seen.add(k_norm)
+        kn = k2.casefold()
+        if k2 and kn not in seen:
+            seen.add(kn)
             norm.append(k2)
     return norm
 
 
 def f1_keywords(preds: List[List[str]], refs: List[List[str]]) -> Dict[str, float]:
-    """
-    Set-based precision/recall/F1 across a corpus.
-    """
     tp = fp = fn = 0
     for p, r in zip(preds, refs):
-        ps = set([x.casefold() for x in p])
-        rs = set([x.casefold() for x in r])
-        tp += len(ps & rs)
-        fp += len(ps - rs)
-        fn += len(rs - ps)
+        ps = set(x.casefold() for x in p)
+        rs = set(x.casefold() for x in r)
+        tp += len(ps & rs); fp += len(ps - rs); fn += len(rs - ps)
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     return {"precision": precision, "recall": recall, "f1": f1}
+
 
 def _clean_single(t: str) -> str:
     if not isinstance(t, str):

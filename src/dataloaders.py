@@ -1,163 +1,137 @@
 import torch
 from dataclasses import dataclass
-from typing import Dict, Optional, List, Any, Tuple
-from schema import DataConfig, PromptConfig
+from typing import Dict, Optional, List, Any
+from schema import Seq2SeqKwPreprocConfig
 from transformers import PreTrainedTokenizerBase
-from datasets import DatasetDict, load_dataset
+from datasets import DatasetDict
+from transformers import DataCollator, AutoTokenizer
 
+class Seq2SeqKeywordPreprocessor:
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, cfg: Seq2SeqKwPreprocConfig):
+        self.tok = tokenizer
+        self.cfg = cfg
 
-class KeywordDataModule:
-    def __init__(self, data_cfg: DataConfig, prompt_cfg: PromptConfig):
-        self.cfg = data_cfg
-        self.prompt = prompt_cfg
+        # T5/FLAN-T5 specifics
+        # - padding token is 0, eos is 1 for T5 tokenizer (already true in most checkpoints)
+        # - pad on right for seq2seq batching
+        self.tok.padding_side = "right"
+        if self.tok.pad_token_id is None:
+            # For T5, pad_token_id should be 0; keep fallback to eos if missing
+            self.tok.pad_token_id = getattr(self.tok, "eos_token_id", 0)
 
-    # --- helpers ---
-    def _to_keyword_list(self, v: Any) -> List[str]:
-        """
-        Normalize 'keywords' field to a list[str].
-        Accepts list[str] or string with separators (\n ; ,).
-        """
-        if v is None:
-            return []
-        if isinstance(v, list):
-            items = [str(x).strip() for x in v if isinstance(x, (str, int, float))]
+    def format_fn(self, ex: Dict[str, Any]) -> Dict[str, str]:
+        """Map a raw example -> {'input_text','target_text'} for seq2seq."""
+        doc = (ex.get("text") or "").strip()
+        kws = ex.get("keywords") or []
+        # ensure keywords is list[str]
+        if isinstance(kws, str):
+            # tolerate accidental single string
+            kws = [k.strip() for k in kws.split(";") if k.strip()]
         else:
-            s = str(v)
-            # split on newline/semicolon/commas
-            parts = []
-            for chunk in s.split("\n"):
-                for p in chunk.split(";"):
-                    parts.extend(p.split(","))
-            items = [p.strip() for p in parts]
-        # drop empties & deduplicate case-insensitively (preserve order)
-        seen, out = set(), []
-        for k in items:
-            if not k:
-                continue
-            kn = k.casefold()
-            if kn not in seen:
-                seen.add(kn)
-                out.append(k)
-        return out
+            kws = [str(k).strip() for k in kws if str(k).strip()]
 
-    def _format_example(self, ex: Dict[str, Any]) -> Dict[str, str]:
-        doc = (ex.get(self.cfg.text_field, "") or "").strip()
-        kw_list = self._to_keyword_list(ex.get(self.cfg.keywords_field, []))
-        labels = self.prompt.sep.join(kw_list)  # e.g., "; ".join(...)
-        prompt = (
-            f"{self.prompt.system_preamble}\n\n"
-            f"DOCUMENT:\n{doc}\n\n"
-            f"{self.prompt.response_tag}"
+        input_text = f"{self.cfg.prefix}{doc}"
+        target_text = self.cfg.sep.join(kws)
+
+        return {"input_text": input_text, "target_text": target_text}
+
+    def tokenize_batch(self, batch: Dict[str, List[str]]) -> Dict[str, Any]:
+        """
+        Tokenize in SAMSum/T5 style:
+          - encode inputs (source)
+          - encode targets (labels), then replace pad_id -> -100 for loss ignoring
+        """
+        inputs = batch["input_text"]
+        targets = batch["target_text"]
+
+        # Encoder side
+        model_inputs = self.tok(
+            inputs,
+            max_length=self.cfg.max_source_len,
+            truncation=self.cfg.truncate_long_docs,
+            padding=False,               # let HF collator do dynamic padding
         )
-        return {"text": prompt, "labels": labels}
 
-    def load(self, dsd: Optional[DatasetDict] = None) -> DatasetDict:
-        # Load DatasetDict (local saved or hub)
-        if dsd is None:
-            if self.cfg.hf_path_or_none is None:
-                raise ValueError("Provide a DatasetDict or set DataConfig.hf_path_or_none.")
-            try:
-                dsd = DatasetDict.load_from_disk(self.cfg.hf_path_or_none)
-            except Exception:
-                # assuming a hub dataset id that exposes splits
-                dsd = load_dataset(self.cfg.hf_path_or_none)
+        # Decoder side (labels)
+        with self.tok.as_target_tokenizer():  # T5-compatible API
+            labels = self.tok(
+                targets,
+                max_length=self.cfg.max_target_len,
+                truncation=True,
+                padding=False,
+            )["input_ids"]
 
-        mapped = DatasetDict()
-        for split in dsd.keys():
-            ds = dsd[split]
+        # Optionally append EOS to labels if tokenizer didn’t
+        if self.cfg.add_eos and self.tok.eos_token_id is not None:
+            eos = self.tok.eos_token_id
+            labels = [seq + ([eos] if (len(seq) == 0 or seq[-1] != eos) else []) for seq in labels]
 
-            # Optional capping for speed/memory
-            if split == "train" and self.cfg.max_train_samples:
-                ds = ds.select(range(min(self.cfg.max_train_samples, len(ds))))
-            if split in ("validation", "test") and self.cfg.max_eval_samples:
-                ds = ds.select(range(min(self.cfg.max_eval_samples, len(ds))))
+        # Replace padding in labels with -100 (trainer ignores those)
+        pad_id = self.tok.pad_token_id
+        labels = [[(tid if tid != pad_id else -100) for tid in seq] for seq in labels]
 
-            # Map to {"text","labels"}
-            ds = ds.map(
-                self._format_example,
-                remove_columns=[c for c in ds.column_names if c not in ("text", "labels")],
-            )
+        model_inputs["labels"] = labels
+        return model_inputs
 
-            # Filter out rows with empty labels (no keywords)
-            ds = ds.filter(lambda ex: bool(ex["labels"] and ex["labels"].strip()))
+    def apply(self, dsd: DatasetDict, num_proc: Optional[int] = None) -> DatasetDict:
+        """
+        Returns a new DatasetDict with columns:
+          input_ids, attention_mask, labels
+        """
+        # 1) map to input/target strings
+        dsd_fmt = dsd.map(self.format_fn, remove_columns=[
+            c for split in dsd for c in dsd[split].column_names
+        ] if len(dsd) and set(next(iter(dsd.values())).column_names) >= {"text", "keywords"} else None)
 
-            mapped[split] = ds
-
-        # Quick sanity: ensure expected columns exist
-        for s in mapped.keys():
-            cols = set(mapped[s].column_names)
-            if not {"text", "labels"}.issubset(cols):
-                raise RuntimeError(f"Split '{s}' must contain 'text' and 'labels', got: {cols}")
-
-        return mapped
+        # 2) tokenize
+        dsd_tok = dsd_fmt.map(
+            self.tokenize_batch,
+            batched=True,
+            num_proc=num_proc,
+            remove_columns=["input_text", "target_text"],
+            desc="Tokenizing (seq2seq SAMSum style)",
+        )
+        return dsd_tok
     
-
 @dataclass
-class KeywordCompletionCollator:
-    tokenizer: PreTrainedTokenizerBase
-    response_template: str = "KEYWORDS:"
-    max_length: int = 2048
-    pad_to_multiple_of: int | None = 8
-    add_eos: bool = True
+class DataCollatorForSeq2SeqSimple(DataCollator):
+    """
+    Minimal seq2seq collator:
+      - dynamically pads input_ids & attention_mask
+      - dynamically pads labels, then turns pad-> -100 for loss masking
+    Works directly on pre-tokenized batches (SAMSum-style).
+    """
+    tokenizer: AutoTokenizer
+    label_pad_token_id: int = -100
+    pad_to_multiple_of: Optional[int] = None
 
-    def _get_text_labels(self, ex: Dict[str, Any]) -> Tuple[str, str]:
-        if "text" in ex and "labels" in ex:
-            return ex["text"], ex["labels"]
-        if "prompt" in ex and "response" in ex:
-            return ex["prompt"], ex["response"]
-        raise KeyError(f"Example must contain ('text','labels') or ('prompt','response'), got: {list(ex.keys())}")
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # Separate labels so we can pad them independently
+        labels = [f["labels"] for f in features]
+        inputs = [{k: v for k, v in f.items() if k != "labels"} for f in features]
 
-    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Normalize to (prompt, target) strings
-        prompts, targets = [], []
-        for ex in batch:
-            p, t = self._get_text_labels(ex)
-            prompts.append(p)
-            targets.append("" if t is None else t)
-
-        # Build full training strings: prompt + target (+ eos)
-        eos = self.tokenizer.eos_token if (self.add_eos and self.tokenizer.eos_token) else ""
-        full_texts = [
-            p + (" " if (t and not p.endswith(" ")) else "") + t + eos
-            for p, t in zip(prompts, targets)
-        ]
-
-        # Tokenize full strings
-        enc = self.tokenizer(
-            full_texts,
+        # Pad encoder inputs (dynamic)
+        batch = self.tokenizer.pad(
+            inputs,
             padding=True,
-            truncation=True,
-            max_length=self.max_length,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors="pt",
         )
-        input_ids = enc["input_ids"]
-        attention_mask = enc["attention_mask"]
 
-        # Tokenize "prompt + response_template" to find the boundary
-        tagged_prompts = [
-            p if p.strip().endswith(self.response_template)
-            else (p.rstrip() + " " + self.response_template)
-            for p in prompts
-        ]
-        tag_enc = self.tokenizer(
-            tagged_prompts,
-            padding=True,
-            truncation=True,
-            max_length=input_ids.size(1),
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            return_tensors="pt",
-        )
-        tag_lens = tag_enc["attention_mask"].sum(dim=1)  # prompt+tag token lengths
-        seq_lens = attention_mask.sum(dim=1)
+        # Pad labels to the max length in this batch (manual)
+        max_len = max(len(l) for l in labels) if labels else 0
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        padded_labels = []
+        for l in labels:
+            pad_len = max_len - len(l)
+            if pad_len > 0:
+                l = l + [pad_id] * pad_len
+            padded_labels.append(l)
 
-        # Build masked labels: -100 before target start, ids on target region
-        labels = input_ids.clone()
-        labels[:] = -100
-        for i in range(input_ids.size(0)):
-            start = int(tag_lens[i].item())
-            end = int(seq_lens[i].item())
-            if start < end:
-                labels[i, start:end] = input_ids[i, start:end]
+        labels_t = torch.tensor(padded_labels, dtype=torch.long)
 
-        return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+        # Replace pad tokens in labels with -100 so they’re ignored by loss
+        labels_t[labels_t == pad_id] = self.label_pad_token_id
+
+        batch["labels"] = labels_t
+        return batch
