@@ -1,8 +1,9 @@
 import re
 import os
 import pandas as pd
+from rouge_score import rouge_scorer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, AutoModelForSeq2SeqLM, PreTrainedModel
-from typing import List, Dict, Union, Optional
+from typing import List, Dict, Union, Optional, Iterable
 from datasets import Dataset, DatasetDict, Features, Value, Sequence
 
 
@@ -167,3 +168,64 @@ def build_hf_dataset_from_pandas(df: pd.DataFrame, seed: int = 42) -> DatasetDic
         "validation": val_test["train"],
         "test": val_test["test"],
     })
+    
+
+def _clean_kw(s: str) -> str:
+    # normalize whitespace, strip quotes/punct at ends
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r'^[\'"“”‘’\(\)\[\]\{\}\-–—,:;]+|[\'"“”‘’\(\)\[\]\{\}\-–—,:;]+$', "", s)
+    return s.strip()
+
+
+def _postprocess(
+    kws: Iterable[str],
+    *,
+    lowercase: bool = False,
+    min_len: int = 2,
+    max_len: Optional[int] = None,
+    dedupe: bool = True,
+) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for k in kws:
+        k2 = _clean_kw(k)
+        if lowercase:
+            k2 = k2.lower()
+        if not k2:
+            continue
+        if len(k2) < min_len:
+            continue
+        if max_len is not None and len(k2) > max_len:
+            continue
+        key = k2.casefold()
+        if dedupe and key in seen:
+            continue
+        seen.add(key)
+        out.append(k2)
+    return out
+
+def _join_keywords(kws: List[str]) -> str:
+    # For ROUGE we compare concatenated strings
+    return "; ".join([_clean_kw(k) for k in kws if _clean_kw(k)])
+
+def rouge_scores(
+    preds: List[List[str]],
+    refs: List[List[str]],
+    *,
+    use_stemmer: bool = True
+) -> Dict[str, float]:
+    scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=use_stemmer)
+    r1, rL = [], []
+    for p, r in zip(preds, refs):
+        pred_text = _join_keywords(p).lower()
+        ref_text  = _join_keywords(r).lower()
+        s = scorer.score(ref_text, pred_text)
+        r1.append(s["rouge1"].fmeasure)
+        rL.append(s["rougeL"].fmeasure)
+    n = max(1, len(r1))
+    return {
+        "rouge1": sum(r1) / n,
+        "rougeL": sum(rL) / n,
+        "rouge_avg": (sum(r1) + sum(rL)) / (2 * n),
+        "count": n,
+    }

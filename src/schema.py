@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
 
@@ -77,3 +77,35 @@ class Seq2SeqKwInferConfig:
     torch_dtype: Optional[str] = None            # "float16" | "bfloat16" | "float32" | None (auto)
     batch_size: int = 8
     truncate_source_to: Optional[int] = 2048     # cap encoder length for very long docs (None = no cap)
+
+
+@dataclass
+class YakeConfig:
+    language: str = "en"            # ISO code, e.g., 'en', 'de'
+    max_ngram_size: int = 3         # 1..3 typical
+    dedup_thresh: float = 0.9       # YAKE’s internal surface dedup threshold
+    window_size: int = 1            # context window
+    top_k: int = 20                 # how many candidates to return
+    features: Optional[List[str]] = None  # default YAKE feature set
+    # post-processing
+    lowercase: bool = False
+    min_len: int = 2
+    max_len: Optional[int] = None
+    dedupe: bool = True
+
+
+@dataclass
+class KeyBertConfig:
+    model_name: str = "all-MiniLM-L6-v2"     # SentenceTransformer backbone
+    top_k: int = 20
+    keyphrase_ngram_range: Tuple[int, int] = (1, 3)
+    stop_words: Optional[str] = "english"    # or None
+    use_maxsum: bool = False                 # diversification strategy A
+    use_mmr: bool = True                     # diversification strategy B (MMR)
+    diversity: float = 0.6                   # 0..1 (only if MMR enabled)
+    min_df: float | int = 1                  # (optional) doc frequency filter for candidates
+    # post-processing
+    lowercase: bool = False
+    min_len: int = 2
+    max_len: Optional[int] = None
+    dedupe: bool = True

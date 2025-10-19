@@ -1,8 +1,12 @@
 # train.py
 import os
 import torch
-from typing import List, Union, Optional, Dict, Any
+import yake
+from keybert import KeyBERT
+from typing import List, Union, Optional, Dict, Any, Tuple
 from dataclasses import asdict
+from utils import _postprocess
+from sentence_transformers import SentenceTransformer
 
 from datasets import DatasetDict
 from transformers import (
@@ -15,7 +19,14 @@ from transformers import (
 )
 
 from utils import normalize_kw_string
-from schema import Seq2SeqKwPreprocConfig, ModelConfig, TrainConfig, Seq2SeqKwInferConfig
+from schema import (
+    Seq2SeqKwPreprocConfig, 
+    ModelConfig, 
+    TrainConfig, 
+    Seq2SeqKwInferConfig,
+    YakeConfig,
+    KeyBertConfig
+    )
 from dataloaders import Seq2SeqKeywordPreprocessor, DataCollatorForSeq2SeqSimple
 
 
@@ -299,3 +310,74 @@ class Seq2SeqKeywordGenerator:
         if name in ("bf16", "bfloat16"):
             return torch.bfloat16
         return torch.float32
+    
+class YakeExtractor:
+    """
+    Thin wrapper over 'yake' to produce a clean List[str] for a single document.
+    """
+    def __init__(self, cfg: Optional[YakeConfig] = None):
+        
+        self.cfg = cfg or YakeConfig()
+        self._yake = yake.KeywordExtractor(
+            lan=self.cfg.language,
+            n=self.cfg.max_ngram_size,
+            dedupLim=self.cfg.dedup_thresh,
+            windowsSize=self.cfg.window_size,
+            top=self.cfg.top_k,
+            features=self.cfg.features,
+        )
+
+    def extract(self, text: str) -> List[str]:
+        if not text or not text.strip():
+            return []
+        scored: List[Tuple[str, float]] = self._yake.extract_keywords(text)
+        # YAKE returns (keyphrase, score) where lower score is better
+        kws_sorted = [kp for kp, _ in sorted(scored, key=lambda x: x[1])]
+        return _postprocess(
+            kws_sorted,
+            lowercase=self.cfg.lowercase,
+            min_len=self.cfg.min_len,
+            max_len=self.cfg.max_len,
+            dedupe=self.cfg.dedupe,
+        )
+
+    def extract_many(self, docs: List[str]) -> List[List[str]]:
+        return [self.extract(d) for d in docs]
+    
+class KeyBertExtractor:
+    """
+    KeyBERT with Sentence-Transformer embeddings + diversification.
+    Returns clean List[str].
+    """
+    def __init__(self, cfg: Optional[KeyBertConfig] = None):
+        
+        self.cfg = cfg or KeyBertConfig()
+        st_model = SentenceTransformer(self.cfg.model_name)
+        self._kw = KeyBERT(model=st_model)
+
+    def extract(self, text: str) -> List[str]:
+        if not text or not text.strip():
+            return []
+        kw_scores = self._kw.extract_keywords(
+            text,
+            keyphrase_ngram_range=self.cfg.keyphrase_ngram_range,
+            stop_words=self.cfg.stop_words,
+            top_n=self.cfg.top_k,
+            use_maxsum=self.cfg.use_maxsum,
+            use_mmr=self.cfg.use_mmr,
+            diversity=self.cfg.diversity,
+            vectorizer=None,        # let KeyBERT handle candidates, or pass a custom one
+            min_df=self.cfg.min_df,
+        )
+        # KeyBERT returns List[(keyword, score)] where higher score ~ better
+        kws_sorted = [kp for kp, _ in kw_scores]
+        return _postprocess(
+            kws_sorted,
+            lowercase=self.cfg.lowercase,
+            min_len=self.cfg.min_len,
+            max_len=self.cfg.max_len,
+            dedupe=self.cfg.dedupe,
+        )
+
+    def extract_many(self, docs: List[str]) -> List[List[str]]:
+        return [self.extract(d) for d in docs]

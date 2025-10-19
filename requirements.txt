@@ -26,3 +26,6 @@ huggingface_hub
 wandb
 rich
 py7zr
+yake
+keybert
+sentence-transformers
