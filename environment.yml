@@ -23,14 +23,18 @@ dependencies:
 
   # Pip section (pull latest HF ecosystem for fine-tuning)
   - pip:
-      - transformers
-      - accelerate
-      - peft
-      - trl
-      - datasets
-      - evaluate
-      - sentencepiece
-      - huggingface_hub
-      - wandb
-      - rich
-      - py7zr
+    - transformers
+    - accelerate
+    - peft
+    - trl
+    - datasets
+    - evaluate
+    - sentencepiece
+    - huggingface_hub
+    - wandb
+    - rich
+    - py7zr
+    - rouge-score
+    - yake
+    - keybert
+    - sentence-transformers
