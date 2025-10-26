@@ -107,9 +107,9 @@ Flan-T5 encoder-decoder:
 - Avg: 0.3531
 
 Two-stage Keyword Generation with Llama 3.2 3B model:
-- ROUGE-1: 0.2516
-- ROUGE-L: 0.1828
-- Avg: 0.2172
+- ROUGE-1: 0.3172
+- ROUGE-L: 0.2334
+- Avg: 0.2753
 
 Notes
 - Two‑stage performance depends heavily on the base candidate quality and prompt/LLM choice. The above numbers used Llama 3.2 3B for refinement.

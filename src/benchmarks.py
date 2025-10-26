@@ -14,8 +14,8 @@ def run_benchmark(
     two_stage_cfg: Optional[StageTwoLLMConfig] = None,
     max_samples: Optional[int] = None,
 ) -> None:
-    texts = ds["text"][:100]
-    refs  = ds["keywords"][:100]
+    texts = ds["text"]
+    refs  = ds["keywords"]
     if max_samples is not None:
         texts = texts[:max_samples]
         refs = refs[:max_samples]
@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--llm-temp", type=float, default=0.0)
     p.add_argument("--llm-top-p", type=float, default=0.9)
     p.add_argument("--llm-rep-penalty", type=float, default=1.05)
-    p.add_argument("--max-samples", type=int, default=None, help="Limit the number of test samples for quick runs.")
+    p.add_argument("--max-samples", type=int, default=50, help="Limit the number of test samples for quick runs.")
 
     return p.parse_args()
 
