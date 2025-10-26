@@ -1,5 +1,8 @@
+from config import Config
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
+
+config = Config()
 
 
 @dataclass
@@ -62,8 +65,8 @@ class Seq2SeqKwInferConfig:
     model_dir: str
 
     # Must match your training preprocessor prompt exactly
-    prefix: str = "Extract keywords:\n\n"   # e.g., "Extract keywords:\n\n"
-    sep: str = "; "                         # how keywords were joined during training
+    prefix: str = "Extract keywords:\n\n"
+    sep: str = "; "
 
     # Generation settings
     max_new_tokens: int = 64
@@ -109,3 +112,25 @@ class KeyBertConfig:
     min_len: int = 2
     max_len: Optional[int] = None
     dedupe: bool = True
+
+
+@dataclass
+class TextRankConfig:
+    model: str = "en_core_web_sm"   # spaCy pipeline with pytextrank registered
+    top_k: int = 20
+    min_len: int = 2
+    max_len: Optional[int] = None
+    lowercase: bool = False
+    dedupe: bool = True
+
+
+@dataclass
+class StageTwoLLMConfig:
+    model_id: str = "mlx-community/Llama-3.2-3B-Instruct-8bit"
+    max_new_tokens: int = 256
+    temperature: float = 0.0
+    top_p: float = 0.9
+    repetition_penalty: float = 1.05
+    response_prefix: str = "KEYWORDS:"
+    system_prompt: str = config.keyword_prompts['system_prompt']
+    user_prompt: str = config.keyword_prompts['user_prompt']

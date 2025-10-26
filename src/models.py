@@ -1,12 +1,17 @@
 # train.py
 import os
+import re
 import torch
 import yake
 from keybert import KeyBERT
 from typing import List, Union, Optional, Dict, Any, Tuple
 from dataclasses import asdict
+from collections import defaultdict
 from utils import _postprocess
+import spacy
+import pytextrank
 from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 from datasets import DatasetDict
 from transformers import (
@@ -25,7 +30,8 @@ from schema import (
     TrainConfig, 
     Seq2SeqKwInferConfig,
     YakeConfig,
-    KeyBertConfig
+    KeyBertConfig,
+    TextRankConfig,
     )
 from dataloaders import Seq2SeqKeywordPreprocessor, DataCollatorForSeq2SeqSimple
 
@@ -373,6 +379,64 @@ class KeyBertExtractor:
         kws_sorted = [kp for kp, _ in kw_scores]
         return _postprocess(
             kws_sorted,
+            lowercase=self.cfg.lowercase,
+            min_len=self.cfg.min_len,
+            max_len=self.cfg.max_len,
+            dedupe=self.cfg.dedupe,
+        )
+
+    def extract_many(self, docs: List[str]) -> List[List[str]]:
+        return [self.extract(d) for d in docs]
+
+
+class TextRankExtractor:
+    """
+    Minimal stub for TextRank-based extractor to keep two-stage pipeline importable
+    without additional dependencies. Returns an empty list (no candidates).
+
+    Replace with a real implementation using spaCy + pytextrank if desired.
+    """
+    def __init__(self, cfg: Optional["TextRankConfig"] = None):  # type: ignore[name-defined]
+        self.cfg = cfg
+
+    def extract(self, text: str) -> List[str]:
+        return []
+
+    def extract_many(self, docs: List[str]) -> List[List[str]]:
+        return [[] for _ in docs]
+
+
+class TextRankExtractor:
+    """
+    TextRank keyword extraction via spaCy + pytextrank.
+    """
+    def __init__(self, cfg: Optional[TextRankConfig] = None):
+        self.cfg = cfg or TextRankConfig()
+        try:
+            self.nlp = spacy.load(self.cfg.model, disable=["ner"])
+        except OSError as e:
+            raise RuntimeError(
+                f"spaCy model '{self.cfg.model}' is not installed. "
+                "Run `python -m spacy download en_core_web_sm` (or your chosen model)."
+            ) from e
+        if not self.nlp.has_pipe("textrank"):
+            self.nlp.add_pipe("textrank")
+
+    def extract(self, text: str) -> List[str]:
+        if not text or not text.strip():
+            return []
+        doc = self.nlp(text)
+        phrases = list(doc._.phrases)
+        top_words = []
+        for phrase in phrases[: self.cfg.top_k]:
+            candidate = phrase.text.strip()
+            if len(candidate) < self.cfg.min_len:
+                continue
+            if self.cfg.max_len is not None and len(candidate) > self.cfg.max_len:
+                continue
+            top_words.append(candidate)
+        return _postprocess(
+            top_words,
             lowercase=self.cfg.lowercase,
             min_len=self.cfg.min_len,
             max_len=self.cfg.max_len,

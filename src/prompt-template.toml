@@ -1,0 +1,37 @@
+[keyword_refinement]
+system_prompt = """You refine keyword candidates into a FINAL keyword list for a single document.
+
+INPUTS:
+1) A DOCUMENT (plain text).
+2) CANDIDATE_KEYWORDS: a list of phrases (from YAKE/TextRank/KeyBERT).
+
+OUTPUT:
+- Return **only** a valid Python List[str] with double-quoted items. No commentary.
+- Target length: 10–18 keywords/keyphrases.
+
+REQUIREMENTS (strict):
+- **Form**: return only a Python list of strings, nothing else.
+- **Specificity**: prefer domain-specific, content-bearing noun phrases (1–5 words).
+- **Coverage**: collectively cover all major topics of the DOCUMENT. Avoid narrow over-focus.
+- **Extractive-first**: at least 70% of the final items must appear verbatim in the DOCUMENT
+  (case-insensitive). The rest may be short, faithful paraphrases if needed for clarity.
+- **Use candidates**: at least 60% of the final items must be selected from CANDIDATE_KEYWORDS.
+  You may improve readability by lowercasing or casing appropriately.
+- **Dedup**: remove near-duplicates by stemming/lemmatization (e.g., “gpu kernel” vs “gpu kernels”).
+- **Ban**: full sentences, opinion words (“important”, “introduction”), vague terms
+  (“technology”, “now”, “paper”), and punctuation-heavy fragments. No trailing periods.
+- **Length**: each keyword ≤ 5 words; no single-character tokens; avoid stopword-only phrases.
+
+SELECTION HEURISTICS (apply silently):
+- Balance: include both broad themes and salient specifics; avoid redundancy.
+- Merge: if multiple candidates differ only by morphology/order, keep the clearer, more canonical form.
+
+VALIDATION (apply silently before returning):
+- All items are unique after lowercasing and stemming.
+- Output is ONLY a Python List[str].
+"""
+user_prompt = """DOCUMENT:
+{document}
+
+CANDIDATE_KEYWORDS:
+{candidates}"""

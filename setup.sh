@@ -73,6 +73,13 @@ if [[ -f "requirements.txt" ]]; then
   python -m pip install -r requirements.txt
 fi
 
+# -------- spaCy models --------
+echo "==> Ensuring spaCy English model (en_core_web_sm) is available..."
+python -m spacy download en_core_web_sm >/dev/null 2>&1 || {
+  echo "⚠️  Could not download en_core_web_sm automatically. Please run:"
+  echo "    python -m spacy download en_core_web_sm"
+}
+
 # -------- Jupyter kernel --------
 echo "==> Registering Jupyter kernel..."
 python -m ipykernel install --user --name "$ENV_NAME" --display-name "$KERNEL_NAME"
