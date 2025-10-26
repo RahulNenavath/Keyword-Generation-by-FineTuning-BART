@@ -1,17 +1,13 @@
 import argparse
 from typing import List
-
 from datasets import load_from_disk, Dataset
-
 from schema import Seq2SeqKwInferConfig
 from models import Seq2SeqKeywordGenerator
 from utils import rouge_scores, f1_keywords
 
-
 def batched(iterable: List[str], batch_size: int):
     for i in range(0, len(iterable), batch_size):
         yield iterable[i : i + batch_size]
-
 
 def evaluate_model(model_dir: str, dataset_path: str, max_samples: int | None, batch_size: int) -> None:
     dsd = load_from_disk(dataset_path)

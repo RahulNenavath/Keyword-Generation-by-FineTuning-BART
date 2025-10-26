@@ -14,8 +14,8 @@ def run_benchmark(
     two_stage_cfg: Optional[StageTwoLLMConfig] = None,
     max_samples: Optional[int] = None,
 ) -> None:
-    texts = ds["text"][:30]
-    refs  = ds["keywords"][:30]
+    texts = ds["text"][:100]
+    refs  = ds["keywords"][:100]
     if max_samples is not None:
         texts = texts[:max_samples]
         refs = refs[:max_samples]

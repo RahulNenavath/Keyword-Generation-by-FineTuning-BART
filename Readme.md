@@ -1,12 +1,46 @@
-# Keyword Generation by Fine‑Tuning Seq2Seq (FLAN‑T5)
+# Keyword Generation: Extraction and Generation Pipelines
 
-This project fine‑tunes a seq2seq transformer (default: FLAN‑T5) to generate keyword phrases from text. It also includes strong keyword extraction baselines (YAKE, KeyBERT) and utilities to prepare HF datasets and evaluate with ROUGE.
+This repository tackles automatic keyword generation for documents using both unsupervised extractors and supervised seq2seq generation. It also includes a two‑stage pipeline that refines extractor candidates with a lightweight local LLM.
 
-Highlights
-- End‑to‑end training with Hugging Face Trainer (seq2seq)
-- Clean preprocessing and dynamic padding with fast tokenizers
-- Baselines: YAKE and KeyBERT with a simple benchmarking script
-- Evaluation script to compute ROUGE‑1/ROUGE‑L and set‑overlap F1 on test split
+## Problem statement
+
+Given an input document, produce a concise, non‑redundant list of keywords/keyphrases that capture the major topics and important concepts of the document.
+
+## Expected input and output
+
+- Input: a document (string)
+- Output: a list of strings (keywords/keyphrases)
+
+Dataset format (Hugging Face load_from_disk):
+- `text`: string
+- `keywords`: List[string]
+
+We expect the dataset at `Data/keyword_dataset` with splits `train`, `validation`, and `test`.
+
+## Approaches included
+
+1) YAKE (unsupervised extractor)
+- Implementation: `YakeExtractor` in `src/models.py`
+- Tunable: top‑K, n‑gram size, dedup threshold, etc. (`YakeConfig`)
+
+2) KeyBERT (unsupervised extractor)
+- Implementation: `KeyBertExtractor` in `src/models.py`
+- Uses SentenceTransformers to embed candidate phrases; supports MMR for diversity (`KeyBertConfig`)
+
+3) Fine‑tuned FLAN‑T5 (seq2seq generation)
+- Training code: `src/train.py` (`KeywordSeq2SeqModel`)
+- Preprocessing and collator: `src/dataloaders.py`
+- Inference wrapper: `src/models.py` (`Seq2SeqKeywordGenerator`)
+- Evaluation helper: `src/evaluate_model.py`
+
+4) Two‑Stage pipeline (candidates + LLM refinement)
+- Stage One: run YAKE, KeyBERT (and optionally TextRank) to create candidate keywords
+- Stage Two: refine the candidate list using a local LLM via MLX (`src/two_stage.py`)
+- Prompts are configurable in `src/prompt-template.toml` and loaded through `src/config.py` → `schema.StageTwoLLMConfig`
+- Notes:
+	- Requires Apple Silicon and `mlx-lm` for local LLM inference
+	- You can set the LLM checkpoint via CLI (e.g., “Llama 3.2 3B”); defaults can be changed in `StageTwoLLMConfig`
+	- TextRank is optional; if you add spaCy + pytextrank, replace the stub `TextRankExtractor` with a real implementation
 
 ## Setup
 
@@ -14,54 +48,83 @@ Conda (recommended)
 1. conda env create -f environment.yml
 2. conda activate keywordgen
 
-Alternatively, pip users can install from `requirements.txt` (ensure PyTorch is installed with the right build for your hardware).
+Alternatively, pip users can install from `requirements.txt` (ensure PyTorch and CUDA/MPS builds match your hardware). Two‑stage LLM refinement requires `mlx-lm` (Apple Silicon).
 
-## Data
+## Train (FLAN‑T5)
 
-Place a Hugging Face dataset (load_from_disk format) at `Data/keyword_dataset` with splits `train/validation/test` and fields:
-- text: string
-- keywords: List[string]
-
-The provided `Data/keyword_dataset/` folder is an example artifact. You can also build from a TSV/Parquet using the notebooks or your own script.
-
-## Train
-
-Use the seq2seq training pipeline in `src/train.py` (class `KeywordSeq2SeqModel`). A minimal example is in `src/train.py` under the `main_train.py` section.
-
-Steps
-- Ensure your dataset path is correct (default: `Data/keyword_dataset`).
-- Adjust `ModelConfig` (e.g., `google/flan-t5-base`) and `TrainConfig` as needed.
-- Run the script to start training; checkpoints will be saved under the configured `output_dir`.
+Use `src/train.py` and the `KeywordSeq2SeqModel` class. A runnable example is provided in the file under the `main_train.py` section.
 
 Artifacts
 - `runs/<name>/checkpoint-*` — intermediate checkpoints
 - `runs/<name>/` — final model and tokenizer (if saved at end)
 
-## Inference
+## Inference (FLAN‑T5)
 
 Use `src/inference.py` with `Seq2SeqKwInferConfig` to load a saved model directory and generate keywords.
 Key notes
-- The `prefix` must match what was used during training (default: `"Extract keywords:\n\n"`).
-- `sep` should match how targets were joined during training (default: `"; "`).
+- `prefix` must match training (default: `"Extract keywords:\n\n"`)
+- `sep` should match how targets were joined (default: `"; "`)
 
 ## Evaluation (ROUGE)
 
-We provide `src/evaluate_model.py` to compute ROUGE‑1/ROUGE‑L (F1) and a set‑overlap F1 for quick sanity checks.
+Use `src/evaluate_model.py` to compute ROUGE‑1, ROUGE‑L (F1), and a set‑overlap F1 on the test split.
 
 Example
-- python src/evaluate_model.py --model-dir runs/flan_t5_kw_cuda/checkpoint-500 --dataset-path Data/keyword_dataset --max-samples 200 --batch-size 16
+```bash
+python src/evaluate_model.py --model-dir runs/flan_t5_kw_cuda/checkpoint-500 --dataset-path Data/keyword_dataset --max-samples 200 --batch-size 16
+```
 
-This prints ROUGE‑1, ROUGE‑L, average, and set‑overlap F1.
+## Benchmarking
 
-## Baselines: YAKE & KeyBERT
+Run `src/benchmarks.py` to evaluate extractors and optionally the two‑stage pipeline on the test split.
 
-Use `src/benchmarks.py` to run baseline extractors against the test split and report ROUGE.
+Examples
+```bash
+# YAKE + KeyBERT only
+python src/benchmarks.py --max-samples 500
+
+# Add Two‑Stage refinement (requires mlx-lm; Apple Silicon)
+python src/benchmarks.py --two-stage --llm-model-id meta-llama/Llama-3.2-3B-Instruct --max-samples 200
+```
+
+### Results (ROUGE F1)
+
+Using the project’s test split, we observed the following scores:
+
+YAKE:
+- ROUGE-1: 0.2429
+- ROUGE-L: 0.1940
+- Avg: 0.2185
+
+KeyBERT:
+- ROUGE-1: 0.2524
+- ROUGE-L: 0.1553
+- Avg: 0.2038
+
+Flan-T5 encoder-decoder:
+- ROUGE-1: 0.3854
+- ROUGE-L: 0.3207
+- Avg: 0.3531
+
+Two-stage Keyword Generation with Llama 3.2 3B model:
+- ROUGE-1: 0.2516
+- ROUGE-L: 0.1828
+- Avg: 0.2172
+
 Notes
-- KeyBERT downloads a SentenceTransformer model (default `all-MiniLM-L6-v2`).
-- YAKE has configurable n‑grams, deduplication, and top‑K.
+- Two‑stage performance depends heavily on the base candidate quality and prompt/LLM choice. The above numbers used Llama 3.2 3B for refinement.
+- FLAN‑T5 fine‑tuning provides the strongest results on this dataset among the included methods.
 
-## Notes
+## Repo map (selected)
 
-- The previous README referenced BART; the current codebase defaults to FLAN‑T5. You can switch to BART by updating `model_id` in `schema.ModelConfig`, but ensure tokenizer and padding settings are appropriate for that model.
-- If you plan to continue LoRA/PEFT training from checkpoints, refer to the notebook utilities or integrate an adapter‑aware loader; the seq2seq path here focuses on standard fine‑tuning.
+- `src/dataloaders.py` — Preprocessing and simple data collator for seq2seq
+- `src/train.py` — Training pipeline for FLAN‑T5
+- `src/models.py` — Inference wrapper for seq2seq; YAKE/KeyBERT (and TextRank stub)
+- `src/two_stage.py` — Two‑stage candidate generation + LLM refinement
+- `src/schema.py` — Config dataclasses
+- `src/utils.py` — Normalization, ROUGE computation, dataset helpers
+- `src/evaluate_model.py` — Evaluate a saved seq2seq model on test split
+- `src/benchmarks.py` — Benchmark extractors and optional two‑stage pipeline
+- `src/config.py` — Loads .env and TOML prompts (`prompt-template.toml`)
+
 
